@@ -1,0 +1,197 @@
+---
+title: "GenotypePrep"
+output:
+  html_document:
+    df_print: paged
+---
+
+_________________________________
+
+The genotype - GBS - file was prepared by filtering the data, imputing missing data, and formatting the data for GWA analysis.
+Software used includes Tassel, vcftools, beagle, and a custom in-house perl script. 
+All Genotype processing was completed on the USDA - SciNet computer. Each step includes a Batch job script and the specific options used to filter, impute, or format the data. 
+
+__________________________________
+
+The first filtering step is completed to remove sites/samples with too much missing data, remove monomorphic and/or sites with a low minor allele frequency, and filter to include only those sites two alleles. 
+
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=04:00:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=40   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --partition=short    # standard node(s)
+#SBATCH --job-name="Pipe 1"
+#SBATCH --mail-type=BEGIN
+#SBATCH --mail-type=END
+#SBATCH --mail-type=FAIL
+
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+# load vcftools module
+module load vcftools/0.1.16
+module load tabix/1.3.2
+# options for how to filter VCF file
+vcftools --gzvcf bill6.filtered.vcf.gz /
+  --max-missing 0.2 /
+  --minDP 10 /
+  --remove-indels /
+  --min-alleles 2 /
+  --max-alleles 2 /
+  --maf 0.05 /
+  --max-maf 0.95 /
+  --recode /
+  --stdout | bgzip -c > 4TradStep1.vcf.gz
+```
+
+The second step is an approach to account for read-mapping and sequencing errors. In this step, any sites that are "hets" but have an alternative allele frequency <0.3/>0.7 are set to NA. 
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=4:0:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=80   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --mem=1494G   # maximum memory per node
+#SBATCH --partition=scavenger    # standard node(s)
+#SBATCH --job-name="Filter.1"
+#SBATCH --mail-user=william.rolling@usda.gov   # email address
+#SBATCH --mail-type=BEGIN
+#SBATCH --mail-type=END
+#SBATCH --mail-type=FAIL
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+# load vcftools module
+module load vcftools/0.1.16
+module load tabix/1.3.2
+# options for how to filter VCF file
+
+perl bb.vcf --infile="4TradStep1.vcf.gz" /
+  --outfile="4TradStep2.vcf.gz" /
+  --task=het /
+  --minratio=0.3 /
+  --maxratio=0.7
+```
+
+A second filtering step is completed to remove any sites where everything was set to NA in the previous step. Usually very few sites are filtered at this step 
+
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=24:0:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=80   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --mem=1494G   # maximum memory per node
+#SBATCH --partition=scavenger    # standard node(s)
+#SBATCH --job-name="Filter.2"
+#SBATCH --mail-user=william.rolling@usda.gov   # email address
+
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+# load vcftools module
+module load vcftools/0.1.16
+module load tabix/1.3.2
+# options for how to filter VCF file
+vcftools --gzvcf 4TradStep2.vcf.gz  /
+  --max-missing 0.3 /
+  --minDP 5 /
+  --remove-indels /
+  --min-alleles 2 /
+  --max-alleles 2 /
+  --maf 0.05 /
+  --max-maf 0.95 /
+  --recode --stdout | bgzip -c > 4TradStep3.vcf.gz
+```
+
+In this step missing genotypes are imputed with Beagle. 
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=20:00:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=80   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --mem=1494G   # maximum memory per node
+#SBATCH --partition=scavenger    # standard node(s)
+#SBATCH --job-name="Beagle"
+#SBATCH --mail-user=william.rolling@usda.gov   # email address
+
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+module load beagle-geno
+module load java
+java -Xmx1494G -jar /software/7/apps/beagle-geno/5.0/beagle.16May19.351.jar /
+  gt=4TradStep3.vcf.gz /
+  out=4TradStep4.vcf.gz /
+  nthreads=216 /   
+  burnin=5 /     
+  iterations=10 /    
+  window=10 /    
+  ap=true /    
+  gp=true
+```
+
+Because "NA" is read as a unique allele, this can result in monomorphic sites following the previous step. A final filter removes any monomorphic sites resulting from imputation. 
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=24:0:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=80   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --mem=1494G   # maximum memory per node
+#SBATCH --partition=scavenger    # standard node(s)
+#SBATCH --job-name="Filter.2"
+#SBATCH --mail-user=william.rolling@usda.gov   # email address
+
+
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+
+# load vcftools module
+module load vcftools/0.1.16
+module load tabix/1.3.2
+# options for how to filter VCF file
+vcftools --gzvcf 4TradStep4.vcf.gz.vcf.gz /
+  --max-missing 0.3 /
+  --minDP 5 /
+  --remove-indels /
+  --min-alleles 2 /
+  --max-alleles 2 /
+  --maf 0.05 /
+  --max-maf 0.95 /
+  --recode /
+  --stdout | bgzip -c > 4TradStep5.vcf.gz
+
+```
+
+The final step is completed in Tassel. This step is used to format the genotype file to hapmap. This genotype file format is used by GAPIT, a GWA analysis software.  
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+#SBATCH --time=04:00:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=40   # 36 processor core(s) per node X 2 threads per core
+#SBATCH --partition=short   # standard node(s)
+#SBATCH --job-name="Tassel.Con"
+#SBATCH --mail-user=william.rolling@usda.gov   # email address
+
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+module load vcftools/0.1.16
+module load tassel5/
+module load tabix/
+run_pipeline.pl -Xmx1494G  /
+  -vcf 4TradStep5.vcf.gz /
+  -export 4TradStep6  /
+  -exportType HapmapDiploid
+```
+
